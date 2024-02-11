@@ -162,6 +162,8 @@ static void terminal_screen_system_font_changed_cb (GSettings *,
 static gboolean terminal_screen_popup_menu (GtkWidget *widget);
 static gboolean terminal_screen_button_press (GtkWidget *widget,
                                               GdkEventButton *event);
+static gboolean terminal_screen_button_release (GtkWidget *widget,
+                                                GdkEventButton *event);
 static void terminal_screen_hierarchy_changed (GtkWidget *widget,
                                                GtkWidget *previous_toplevel);
 static void terminal_screen_child_exited  (VteTerminal *terminal,
@@ -677,6 +679,7 @@ terminal_screen_class_init (TerminalScreenClass *klass)
   widget_class->style_updated = terminal_screen_style_updated;
   widget_class->drag_data_received = terminal_screen_drag_data_received;
   widget_class->button_press_event = terminal_screen_button_press;
+  widget_class->button_release_event = terminal_screen_button_release;
   widget_class->popup_menu = terminal_screen_popup_menu;
   widget_class->hierarchy_changed = terminal_screen_hierarchy_changed;
 
@@ -691,7 +694,7 @@ terminal_screen_class_init (TerminalScreenClass *klass)
                   g_cclosure_marshal_VOID__OBJECT,
                   G_TYPE_NONE,
                   1, G_TYPE_SETTINGS);
-  
+
   signals[SHOW_POPUP_MENU] =
     g_signal_new (I_("show-popup-menu"),
                   G_OBJECT_CLASS_TYPE (object_class),
@@ -712,7 +715,7 @@ terminal_screen_class_init (TerminalScreenClass *klass)
                   _terminal_marshal_BOOLEAN__STRING_INT_UINT,
                   G_TYPE_BOOLEAN,
                   3, G_TYPE_STRING, G_TYPE_INT, G_TYPE_UINT);
-  
+
   signals[CLOSE_SCREEN] =
     g_signal_new (I_("close-screen"),
                   G_OBJECT_CLASS_TYPE (object_class),
@@ -1213,7 +1216,7 @@ terminal_screen_profile_changed_cb (GSettings     *profile,
   if (!prop_name || prop_name == I_(TERMINAL_PROFILE_BACKSPACE_BINDING_KEY))
   vte_terminal_set_backspace_binding (vte_terminal,
                                       VteEraseBinding(g_settings_get_enum (profile, TERMINAL_PROFILE_BACKSPACE_BINDING_KEY)));
-  
+
   if (!prop_name || prop_name == I_(TERMINAL_PROFILE_DELETE_BINDING_KEY))
   vte_terminal_set_delete_binding (vte_terminal,
                                    VteEraseBinding(g_settings_get_enum (profile, TERMINAL_PROFILE_DELETE_BINDING_KEY)));
@@ -1994,10 +1997,21 @@ terminal_screen_button_press (GtkWidget      *widget,
     {
       if (!(event->state & (GDK_SHIFT_MASK | GDK_CONTROL_MASK | GDK_MOD1_MASK)))
         {
+          gboolean can_paste_on_secondary_click;
+
           /* on right-click, we should first try to send the mouse event to
            * the client, and popup only if that's not handled. */
           if (button_press_event && button_press_event (widget, event))
             return TRUE;
+
+          can_paste_on_secondary_click =
+            g_settings_get_boolean (terminal_app_get_global_settings (terminal_app_get ()),
+                                      TERMINAL_SETTING_ENABLE_PASTE_ON_SEC_CLICK_KEY);
+          if (can_paste_on_secondary_click)
+            {
+              vte_terminal_paste_clipboard (VTE_TERMINAL (screen));
+              return TRUE;
+            }
 
           terminal_screen_do_popup (screen, event, hyperlink, url, url_flavor, number_info, timestamp_info);
           hyperlink = nullptr; /* adopted to the popup info */
@@ -2023,6 +2037,39 @@ terminal_screen_button_press (GtkWidget      *widget,
     return button_press_event (widget, event);
 
   return FALSE;
+}
+
+static gboolean
+terminal_screen_button_release (GtkWidget      *widget,
+                                GdkEventButton *event)
+{
+  gboolean ret;
+
+  TerminalScreen *screen = TERMINAL_SCREEN (widget);
+  gboolean (* button_release_event) (GtkWidget*, GdkEventButton*) =
+    GTK_WIDGET_CLASS (terminal_screen_parent_class)->button_release_event;
+
+  ret = FALSE;
+  if (button_release_event)
+    {
+      ret = button_release_event (widget, event);
+    }
+
+  if (event->button == 1)
+    {
+      gboolean can_copy, can_copy_on_select;
+
+      can_copy = vte_terminal_get_has_selection (VTE_TERMINAL (screen));
+
+      can_copy_on_select =
+        g_settings_get_boolean (terminal_app_get_global_settings (terminal_app_get ()),
+                                  TERMINAL_SETTING_ENABLE_COPY_ON_SELECT_KEY);
+
+      if (can_copy && can_copy_on_select)
+        vte_terminal_copy_clipboard (VTE_TERMINAL (screen));
+    }
+
+  return ret;
 }
 
 /**
@@ -2160,8 +2207,8 @@ terminal_screen_drag_data_received (GtkWidget        *widget,
       {
         GdkAtom atom = GDK_POINTER_TO_ATOM (tmp->data);
 
-        g_print ("Target: %s\n", gdk_atom_name (atom));        
-        
+        g_print ("Target: %s\n", gdk_atom_name (atom));
+
         tmp = tmp->next;
       }
 
@@ -2224,7 +2271,7 @@ terminal_screen_drag_data_received (GtkWidget        *widget,
         char *utf8_data, *text;
         char *uris[2];
         gsize len;
-        
+
         /* MOZ_URL is in UCS-2 but in format 8. BROKEN!
          *
          * The data contains the URL, a \n, then the
@@ -2260,7 +2307,7 @@ terminal_screen_drag_data_received (GtkWidget        *widget,
         char *utf8_data, *newline, *text;
         char *uris[2];
         gsize len;
-        
+
         /* The data contains the URL, a \n, then the
          * title of the web page.
          */
@@ -2440,7 +2487,7 @@ terminal_screen_check_extra (TerminalScreen *screen,
  *
  * Checks whether there's a foreground process running in
  * this terminal.
- * 
+ *
  * Returns: %TRUE iff there's a foreground process running in @screen
  */
 gboolean

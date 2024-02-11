@@ -87,6 +87,8 @@ G_BEGIN_DECLS
 #define TERMINAL_SETTING_CONTEXT_INFO_KEY               "context-info"
 #define TERMINAL_SETTING_DEFAULT_SHOW_MENUBAR_KEY       "default-show-menubar"
 #define TERMINAL_SETTING_ENABLE_MENU_BAR_ACCEL_KEY      "menu-accelerator-enabled"
+#define TERMINAL_SETTING_ENABLE_COPY_ON_SELECT_KEY      "copy-on-select-enabled"
+#define TERMINAL_SETTING_ENABLE_PASTE_ON_SEC_CLICK_KEY  "paste-on-secondary-click-enabled"
 #define TERMINAL_SETTING_ENABLE_MNEMONICS_KEY           "mnemonics-enabled"
 #define TERMINAL_SETTING_ENABLE_SHORTCUTS_KEY           "shortcuts-enabled"
 #define TERMINAL_SETTING_HEADERBAR_KEY                  "headerbar"

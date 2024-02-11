@@ -118,7 +118,7 @@
 
   <!-- Profiles list schema -->
 
-  <schema id="org.gnome.Terminal.ProfilesList" 
+  <schema id="org.gnome.Terminal.ProfilesList"
           extends="org.gnome.Terminal.SettingsList"
           path="/org/gnome/terminal/legacy/profiles:/">
     <override name="list">['b1dcc9dd-5262-4d8d-a863-c897e6d979b9']</override>
@@ -676,6 +676,26 @@
         be customized via gtkrc (gtk-menu-bar-accel =
         "whatever"). This option allows the standard menubar
         accelerator to be disabled.
+      </description>
+    </key>
+
+    <key name="copy-on-select-enabled" type="b">
+      <default>false</default>
+      <summary>Whether the selected text should be copied to clipboard</summary>
+      <description>
+        Normally need to use shift+ctrl+c to copy to main clipboard.
+        This setting copies selected text to main clipboard for use
+        by other applications as well.
+      </description>
+    </key>
+
+    <key name="paste-on-secondary-click-enabled" type="b">
+      <default>false</default>
+      <summary>Whether to paste from clipboard by secondary click</summary>
+      <description>
+        Normally need to use shift+ctrl+v to paste context from main clipboard.
+        This setting allows to paste text from main clipboard by using
+        secondary mouse/touchpad click.
       </description>
     </key>
 

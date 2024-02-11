@@ -730,6 +730,7 @@ terminal_prefs_show_preferences(GSettings* profile,
   PrefData *data;
   GtkWidget *dialog, *tree_view;
   GtkWidget *show_menubar_button, *disable_mnemonics_button, *disable_menu_accel_button;
+  GtkWidget *disable_copy_on_select_button, *disable_paste_on_secondary_click_button;
   GtkWidget *disable_shortcuts_button;
   GtkWidget *theme_variant_label, *theme_variant_combo;
   GtkWidget *new_terminal_mode_label, *new_terminal_mode_combo;
@@ -771,6 +772,8 @@ terminal_prefs_show_preferences(GSettings* profile,
                                        "disable-mnemonics-checkbutton", &disable_mnemonics_button,
                                        "disable-shortcuts-checkbutton", &disable_shortcuts_button,
                                        "disable-menu-accel-checkbutton", &disable_menu_accel_button,
+                                       "disable-copy-on-select-checkbutton", &disable_copy_on_select_button,
+                                       "disable-paste-on-secondary-click-checkbutton", &disable_paste_on_secondary_click_button,
                                        "new-tab-position-combobox", &new_tab_position_combo,
                                        "always-check-default-checkbutton", &always_check_default_button,
                                        "make-default-button", &make_default_button,
@@ -863,6 +866,16 @@ terminal_prefs_show_preferences(GSettings* profile,
   g_settings_bind (settings,
                    TERMINAL_SETTING_ENABLE_MENU_BAR_ACCEL_KEY,
                    disable_menu_accel_button,
+                   "active",
+                   GSettingsBindFlags(G_SETTINGS_BIND_GET | G_SETTINGS_BIND_SET));
+  g_settings_bind (settings,
+                   TERMINAL_SETTING_ENABLE_COPY_ON_SELECT_KEY,
+                   disable_copy_on_select_button,
+                   "active",
+                   GSettingsBindFlags(G_SETTINGS_BIND_GET | G_SETTINGS_BIND_SET));
+  g_settings_bind (settings,
+                   TERMINAL_SETTING_ENABLE_PASTE_ON_SEC_CLICK_KEY,
+                   disable_paste_on_secondary_click_button,
                    "active",
                    GSettingsBindFlags(G_SETTINGS_BIND_GET | G_SETTINGS_BIND_SET));
 
