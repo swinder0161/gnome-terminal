@@ -118,7 +118,7 @@
 
   <!-- Profiles list schema -->
 
-  <schema id="org.gnome.Terminal.ProfilesList" 
+  <schema id="org.gnome.Terminal.ProfilesList"
           extends="org.gnome.Terminal.SettingsList"
           path="/org/gnome/terminal/legacy/profiles:/">
     <override name="list">['b1dcc9dd-5262-4d8d-a863-c897e6d979b9']</override>
@@ -348,6 +348,20 @@
     <key name="cjk-utf8-ambiguous-width" enum="org.gnome.Terminal.CJKWidth">
       <default>'narrow'</default>
       <summary>Whether ambiguous-width characters are narrow or wide when using UTF-8 encoding</summary>
+    </key>
+    <key name="use-transparent-background" type="b">
+      <default>false</default>
+      <summary>Whether to use a transparent background</summary>
+    </key>
+    <key name="use-theme-transparency" type="b">
+      <default>true</default>
+      <summary>Whether to use the value of TerminalScreen-background-darkness,
+          if available, from the theme for the transparency value.</summary>
+    </key>
+    <key name="background-transparency-percent" type="i">
+      <default>50</default>
+      <summary>Adjust the amount of transparency</summary>
+      <description>A value between 0 and 100, where 0 is opaque and 100 is fully transparent.</description>
     </key>
   </schema>
 
@@ -656,6 +670,26 @@
         be customized via gtkrc (gtk-menu-bar-accel =
         "whatever"). This option allows the standard menubar
         accelerator to be disabled.
+      </description>
+    </key>
+
+    <key name="copy-on-select-enabled" type="b">
+      <default>false</default>
+      <summary>Whether the selected text should be copied to clipboard</summary>
+      <description>
+        Normally need to use shift+ctrl+c to copy to main clipboard.
+        This setting copies selected text to main clipboard for use
+        by other applications as well.
+      </description>
+    </key>
+
+    <key name="paste-on-secondary-click-enabled" type="b">
+      <default>false</default>
+      <summary>Whether to paste from clipboard by secondary click</summary>
+      <description>
+        Normally need to use shift+ctrl+v to paste context from main clipboard.
+        This setting allows to paste text from main clipboard by using
+        secondary mouse/touchpad click.
       </description>
     </key>
 

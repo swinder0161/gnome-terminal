@@ -108,6 +108,8 @@ struct _TerminalScreenPrivate
   gboolean exec_on_realize;
   guint idle_exec_source;
   ExecData *exec_data;
+  GdkRGBA bg_color;
+  GdkRGBA fg_color;
 };
 
 enum
@@ -123,6 +125,8 @@ enum {
   PROP_0,
   PROP_PROFILE,
   PROP_TITLE,
+  PROP_BG_COLOR,
+  PROP_FG_COLOR
 };
 
 enum
@@ -134,6 +138,8 @@ enum
   TARGET_NETSCAPE_URL,
   TARGET_TAB
 };
+
+#define TERMINAL_SCREEN_STYLE_CLASS "terminal-screen"
 
 static void terminal_screen_constructed (GObject             *object);
 static void terminal_screen_dispose     (GObject             *object);
@@ -152,6 +158,10 @@ static void terminal_screen_system_font_changed_cb (GSettings *,
 static gboolean terminal_screen_popup_menu (GtkWidget *widget);
 static gboolean terminal_screen_button_press (GtkWidget *widget,
                                               GdkEventButton *event);
+static gboolean terminal_screen_button_release (GtkWidget *widget,
+                                                GdkEventButton *event);
+static void terminal_screen_hierarchy_changed (GtkWidget *widget,
+                                               GtkWidget *previous_toplevel);
 static void terminal_screen_child_exited  (VteTerminal *terminal,
                                            int status);
 
@@ -206,6 +216,7 @@ static const TerminalRegexPattern url_regex_patterns[] = {
   { REGEX_URL_VOIP,  FLAVOR_VOIP_CALL },
   { REGEX_EMAIL,     FLAVOR_EMAIL },
   { REGEX_NEWS_MAN,  FLAVOR_AS_IS },
+  { REGEX_LP,        FLAVOR_LP },
 };
 
 static const TerminalRegexPattern extra_regex_patterns[] = {
@@ -266,8 +277,7 @@ exec_data_new (void)
 }
 
 static ExecData *
-exec_data_clone (ExecData *data,
-                 gboolean preserve_argv)
+exec_data_clone (ExecData *data)
 {
   if (data == nullptr)
     return nullptr;
@@ -277,8 +287,7 @@ exec_data_clone (ExecData *data,
   clone->cwd = g_strdup (data->cwd);
 
   /* If FDs were passed, cannot repeat argv. Return data only for env and cwd */
-  if (!preserve_argv ||
-      data->fd_list != nullptr) {
+  if (data->fd_list != nullptr) {
     clone->as_shell = TRUE;
     return clone;
   }
@@ -353,6 +362,63 @@ terminal_screen_clear_exec_data (TerminalScreen *screen,
 }
 
 G_DEFINE_TYPE (TerminalScreen, terminal_screen, VTE_TYPE_TERMINAL)
+
+static char *
+cwd_of_pid (int pid)
+{
+  static const char patterns[][18] = {
+    "/proc/%d/cwd",         /* Linux */
+    "/proc/%d/path/cwd",    /* Solaris >= 10 */
+  };
+  guint i;
+
+  if (pid == -1)
+    return nullptr;
+
+  /* Try to get the working directory using various OS-specific mechanisms */
+  for (i = 0; i < G_N_ELEMENTS (patterns); ++i)
+    {
+      char cwd_file[64];
+      char buf[PATH_MAX + 1];
+      int len;
+
+      /* disable "format not a string literal" error, we know what we are doing */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
+      g_snprintf (cwd_file, sizeof (cwd_file), patterns[i], pid);
+#pragma GCC diagnostic pop
+      len = readlink (cwd_file, buf, sizeof (buf) - 1);
+
+      if (len > 0 && buf[0] == '/')
+        return g_strndup (buf, len);
+
+      /* If that didn't do it, try this hack */
+      if (len <= 0)
+        {
+          char *cwd, *working_dir = NULL;
+
+          cwd = g_get_current_dir ();
+          if (cwd != NULL)
+            {
+              /* On Solaris, readlink returns an empty string, but the
+               * link can be used as a directory, including as a target
+               * of chdir().
+               */
+              if (chdir (cwd_file) == 0)
+                {
+                  working_dir = g_get_current_dir ();
+                  (void) chdir (cwd);
+                }
+              g_free (cwd);
+            }
+
+          if (working_dir)
+            return working_dir;
+        }
+    }
+
+  return nullptr;
+}
 
 static void
 free_tag_data (TagData *tagdata)
@@ -480,8 +546,13 @@ terminal_screen_init (TerminalScreen *screen)
   guint i;
   uuid_t u;
   char uuidstr[37];
+  GtkStyleContext *context;
 
   priv = screen->priv = G_TYPE_INSTANCE_GET_PRIVATE (screen, TERMINAL_TYPE_SCREEN, TerminalScreenPrivate);
+
+  context = gtk_widget_get_style_context (GTK_WIDGET (screen));
+
+  gtk_style_context_add_class (context, TERMINAL_SCREEN_STYLE_CLASS);
 
   uuid_generate (u);
   uuid_unparse (u, uuidstr);
@@ -549,6 +620,12 @@ terminal_screen_get_property (GObject *object,
       case PROP_TITLE:
         g_value_set_string (value, terminal_screen_get_title (screen));
         break;
+      case PROP_BG_COLOR:
+        g_value_set_boxed (value, terminal_screen_get_bg_color (screen));
+        break;
+      case PROP_FG_COLOR:
+        g_value_set_boxed (value, terminal_screen_get_bg_color (screen));
+        break;
       default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
         break;
@@ -569,6 +646,8 @@ terminal_screen_set_property (GObject *object,
         terminal_screen_set_profile (screen, (GSettings*)g_value_get_object (value));
         break;
       case PROP_TITLE:
+      case PROP_FG_COLOR:
+      case PROP_BG_COLOR:
         /* not writable */
       default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -594,7 +673,9 @@ terminal_screen_class_init (TerminalScreenClass *klass)
   widget_class->style_updated = terminal_screen_style_updated;
   widget_class->drag_data_received = terminal_screen_drag_data_received;
   widget_class->button_press_event = terminal_screen_button_press;
+  widget_class->button_release_event = terminal_screen_button_release;
   widget_class->popup_menu = terminal_screen_popup_menu;
+  widget_class->hierarchy_changed = terminal_screen_hierarchy_changed;
 
   terminal_class->child_exited = terminal_screen_child_exited;
 
@@ -607,7 +688,7 @@ terminal_screen_class_init (TerminalScreenClass *klass)
                   g_cclosure_marshal_VOID__OBJECT,
                   G_TYPE_NONE,
                   1, G_TYPE_SETTINGS);
-  
+
   signals[SHOW_POPUP_MENU] =
     g_signal_new (I_("show-popup-menu"),
                   G_OBJECT_CLASS_TYPE (object_class),
@@ -628,7 +709,7 @@ terminal_screen_class_init (TerminalScreenClass *klass)
                   _terminal_marshal_BOOLEAN__STRING_INT_UINT,
                   G_TYPE_BOOLEAN,
                   3, G_TYPE_STRING, G_TYPE_INT, G_TYPE_UINT);
-  
+
   signals[CLOSE_SCREEN] =
     g_signal_new (I_("close-screen"),
                   G_OBJECT_CLASS_TYPE (object_class),
@@ -659,7 +740,35 @@ terminal_screen_class_init (TerminalScreenClass *klass)
 				      G_PARAM_STATIC_NICK |
 				      G_PARAM_STATIC_BLURB)));
 
+  g_object_class_install_property
+    (object_class,
+     PROP_BG_COLOR,
+     g_param_spec_boxed ("bg-color", NULL, NULL,
+                         GDK_TYPE_RGBA,
+                         GParamFlags(G_PARAM_READABLE |
+				     G_PARAM_STATIC_NAME |
+				     G_PARAM_STATIC_NICK |
+				     G_PARAM_STATIC_BLURB)));
+
+  g_object_class_install_property
+    (object_class,
+     PROP_FG_COLOR,
+     g_param_spec_boxed ("fg-color", NULL, NULL,
+                         GDK_TYPE_RGBA,
+                         GParamFlags(G_PARAM_READABLE |
+				     G_PARAM_STATIC_NAME |
+				     G_PARAM_STATIC_NICK |
+				     G_PARAM_STATIC_BLURB)));
+
   g_type_class_add_private (object_class, sizeof (TerminalScreenPrivate));
+
+  gtk_widget_class_install_style_property (widget_class,
+     g_param_spec_float ("background-darkness", NULL, NULL, -1, 1, -1,
+                         GParamFlags(G_PARAM_READABLE |
+				     G_PARAM_STATIC_NAME |
+				     G_PARAM_STATIC_NICK |
+				     G_PARAM_STATIC_BLURB)));
+
 
   n_url_regexes = G_N_ELEMENTS (url_regex_patterns);
   precompile_regexes (url_regex_patterns, n_url_regexes, &url_regexes, &url_regex_flavors);
@@ -829,7 +938,6 @@ terminal_screen_reexec_from_screen (TerminalScreen *screen,
 
   g_return_val_if_fail (TERMINAL_IS_SCREEN (parent_screen), FALSE);
 
-  terminal_unref_exec_data ExecData* data = exec_data_clone (parent_screen->priv->exec_data, FALSE);
   gs_free char* cwd = terminal_screen_get_current_dir (parent_screen);
 
   _terminal_debug_print (TERMINAL_DEBUG_PROCESSES,
@@ -839,7 +947,7 @@ terminal_screen_reexec_from_screen (TerminalScreen *screen,
                          cwd);
 
   return terminal_screen_reexec_from_exec_data (screen,
-                                                data,
+                                                nullptr /* exec data */,
                                                 nullptr /* envv */,
                                                 cwd,
                                                 cancellable,
@@ -996,6 +1104,22 @@ terminal_screen_get_title (TerminalScreen *screen)
   return vte_terminal_get_window_title (VTE_TERMINAL (screen));
 }
 
+GdkRGBA*
+terminal_screen_get_bg_color (TerminalScreen *screen)
+{
+  g_return_val_if_fail (TERMINAL_IS_SCREEN (screen), NULL);
+
+  return &screen->priv->bg_color;
+}
+
+GdkRGBA*
+terminal_screen_get_fg_color (TerminalScreen *screen)
+{
+  g_return_val_if_fail (TERMINAL_IS_SCREEN (screen), NULL);
+
+  return &screen->priv->fg_color;
+}
+
 static void
 terminal_screen_profile_changed_cb (GSettings     *profile,
                                     const char    *prop_name,
@@ -1055,7 +1179,10 @@ terminal_screen_profile_changed_cb (GSettings     *profile,
       prop_name == I_(TERMINAL_PROFILE_HIGHLIGHT_COLORS_SET_KEY) ||
       prop_name == I_(TERMINAL_PROFILE_HIGHLIGHT_BACKGROUND_COLOR_KEY) ||
       prop_name == I_(TERMINAL_PROFILE_HIGHLIGHT_FOREGROUND_COLOR_KEY) ||
-      prop_name == I_(TERMINAL_PROFILE_PALETTE_KEY))
+      prop_name == I_(TERMINAL_PROFILE_PALETTE_KEY) ||
+      prop_name == I_(TERMINAL_PROFILE_USE_TRANSPARENT_BACKGROUND) ||
+      prop_name == I_(TERMINAL_PROFILE_BACKGROUND_TRANSPARENCY_PERCENT) ||
+      prop_name == I_(TERMINAL_PROFILE_USE_THEME_TRANSPARENCY))
     update_color_scheme (screen);
 
   if (!prop_name || prop_name == I_(TERMINAL_PROFILE_AUDIBLE_BELL_KEY))
@@ -1079,7 +1206,7 @@ terminal_screen_profile_changed_cb (GSettings     *profile,
   if (!prop_name || prop_name == I_(TERMINAL_PROFILE_BACKSPACE_BINDING_KEY))
   vte_terminal_set_backspace_binding (vte_terminal,
                                       VteEraseBinding(g_settings_get_enum (profile, TERMINAL_PROFILE_BACKSPACE_BINDING_KEY)));
-  
+
   if (!prop_name || prop_name == I_(TERMINAL_PROFILE_DELETE_BINDING_KEY))
   vte_terminal_set_delete_binding (vte_terminal,
                                    VteEraseBinding(g_settings_get_enum (profile, TERMINAL_PROFILE_DELETE_BINDING_KEY)));
@@ -1126,6 +1253,32 @@ terminal_screen_profile_changed_cb (GSettings     *profile,
 }
 
 static void
+update_toplevel_transparency (TerminalScreen *screen)
+{
+  GtkWidget *widget = GTK_WIDGET (screen);
+  TerminalScreenPrivate *priv = screen->priv;
+  GSettings *profile = priv->profile;
+  GtkWidget *toplevel;
+
+  toplevel = gtk_widget_get_toplevel (widget);
+  if (toplevel != NULL && gtk_widget_is_toplevel (toplevel))
+    {
+      gboolean transparent;
+
+      transparent = g_settings_get_boolean (profile, TERMINAL_PROFILE_USE_TRANSPARENT_BACKGROUND);
+      if (gtk_widget_get_app_paintable (toplevel) != transparent)
+        {
+          gtk_widget_set_app_paintable (toplevel, transparent);
+
+          /* The opaque region of the toplevel isn't updated until the toplevel is allocated;
+           * set_app_paintable() doesn't force an allocation, so do that manually.
+           */
+          gtk_widget_queue_resize (toplevel);
+        }
+    }
+}
+
+static void
 update_color_scheme (TerminalScreen *screen)
 {
   GtkWidget *widget = GTK_WIDGET (screen);
@@ -1141,6 +1294,9 @@ update_color_scheme (TerminalScreen *screen)
   GdkRGBA *highlight_bgp = nullptr, *highlight_fgp = nullptr;
   GtkStyleContext *context;
   gboolean use_theme_colors;
+  GtkWidget *toplevel;
+  gboolean transparent, theme_transparent;
+  gfloat style_darkness;
 
   context = gtk_widget_get_style_context (widget);
   gtk_style_context_get_color (context, gtk_style_context_get_state (context), &theme_fg);
@@ -1183,6 +1339,31 @@ update_color_scheme (TerminalScreen *screen)
     }
 
   colors = terminal_g_settings_get_rgba_palette (priv->profile, TERMINAL_PROFILE_PALETTE_KEY, &n_colors);
+  theme_transparent = g_settings_get_boolean (profile, TERMINAL_PROFILE_USE_THEME_TRANSPARENCY);
+  transparent = g_settings_get_boolean (profile, TERMINAL_PROFILE_USE_TRANSPARENT_BACKGROUND);
+
+  gtk_widget_style_get (GTK_WIDGET (screen),
+                        "background-darkness", &style_darkness,
+                        NULL);
+
+  if (theme_transparent && style_darkness >= 0)
+    {
+      bg.alpha = style_darkness;
+    }
+  else if (transparent)
+    {
+      gint transparency_percent;
+
+      transparency_percent = g_settings_get_int (profile, TERMINAL_PROFILE_BACKGROUND_TRANSPARENCY_PERCENT);
+      bg.alpha = (100 - transparency_percent) / 100.0;
+    }
+  else
+      bg.alpha = 1.0;
+
+  /* If this gets out of range, let's not crash */
+  if (bg.alpha < 0.0 || bg.alpha > 1.0)
+      bg.alpha = 1.0;
+
   vte_terminal_set_colors (VTE_TERMINAL (screen), &fg, &bg,
                            colors, n_colors);
   vte_terminal_set_color_bold (VTE_TERMINAL (screen), boldp);
@@ -1190,6 +1371,20 @@ update_color_scheme (TerminalScreen *screen)
   vte_terminal_set_color_cursor_foreground (VTE_TERMINAL (screen), cursor_fgp);
   vte_terminal_set_color_highlight (VTE_TERMINAL (screen), highlight_bgp);
   vte_terminal_set_color_highlight_foreground (VTE_TERMINAL (screen), highlight_fgp);
+
+  if (gdk_rgba_hash (&priv->bg_color) != gdk_rgba_hash (&bg))
+    {
+      priv->bg_color = bg;
+      g_object_notify (G_OBJECT (screen), "bg-color");
+    }
+
+  if (gdk_rgba_hash (&priv->fg_color) != gdk_rgba_hash (&fg))
+    {
+      priv->fg_color = fg;
+      g_object_notify (G_OBJECT (screen), "fg-color");
+    }
+
+  update_toplevel_transparency (screen);
 }
 
 static void
@@ -1558,7 +1753,7 @@ spawn_result_cb (VteTerminal *terminal,
   }
 
   /* Retain info for reexec, if possible */
-  ExecData *new_exec_data = exec_data_clone (exec_data, TRUE);
+  ExecData *new_exec_data = exec_data_clone (exec_data);
   terminal_screen_clear_exec_data (screen, FALSE);
   priv->exec_data = new_exec_data;
   }
@@ -1709,6 +1904,13 @@ terminal_screen_do_popup (TerminalScreen *screen,
   terminal_screen_popup_info_unref (info);
 }
 
+static void
+terminal_screen_hierarchy_changed (GtkWidget *widget,
+                                   GtkWidget *previous_toplevel)
+{
+  update_toplevel_transparency (TERMINAL_SCREEN (widget));
+}
+
 static gboolean
 terminal_screen_button_press (GtkWidget      *widget,
                               GdkEventButton *event)
@@ -1763,10 +1965,21 @@ terminal_screen_button_press (GtkWidget      *widget,
     {
       if (!(event->state & (GDK_SHIFT_MASK | GDK_CONTROL_MASK | GDK_MOD1_MASK)))
         {
+          gboolean can_paste_on_secondary_click;
+
           /* on right-click, we should first try to send the mouse event to
            * the client, and popup only if that's not handled. */
           if (button_press_event && button_press_event (widget, event))
             return TRUE;
+
+          can_paste_on_secondary_click =
+            g_settings_get_boolean (terminal_app_get_global_settings (terminal_app_get ()),
+                                      TERMINAL_SETTING_ENABLE_PASTE_ON_SEC_CLICK_KEY);
+          if (can_paste_on_secondary_click)
+            {
+              vte_terminal_paste_clipboard (VTE_TERMINAL (screen));
+              return TRUE;
+            }
 
           terminal_screen_do_popup (screen, event, hyperlink, url, url_flavor, number_info, timestamp_info);
           hyperlink = nullptr; /* adopted to the popup info */
@@ -1794,6 +2007,39 @@ terminal_screen_button_press (GtkWidget      *widget,
   return FALSE;
 }
 
+static gboolean
+terminal_screen_button_release (GtkWidget      *widget,
+                                GdkEventButton *event)
+{
+  gboolean ret;
+
+  TerminalScreen *screen = TERMINAL_SCREEN (widget);
+  gboolean (* button_release_event) (GtkWidget*, GdkEventButton*) =
+    GTK_WIDGET_CLASS (terminal_screen_parent_class)->button_release_event;
+
+  ret = FALSE;
+  if (button_release_event)
+    {
+      ret = button_release_event (widget, event);
+    }
+
+  if (event->button == 1)
+    {
+      gboolean can_copy, can_copy_on_select;
+
+      can_copy = vte_terminal_get_has_selection (VTE_TERMINAL (screen));
+
+      can_copy_on_select =
+        g_settings_get_boolean (terminal_app_get_global_settings (terminal_app_get ()),
+                                  TERMINAL_SETTING_ENABLE_COPY_ON_SELECT_KEY);
+
+      if (can_copy && can_copy_on_select)
+        vte_terminal_copy_clipboard (VTE_TERMINAL (screen));
+    }
+
+  return ret;
+}
+
 /**
  * terminal_screen_get_current_dir:
  * @screen:
@@ -1807,11 +2053,20 @@ terminal_screen_button_press (GtkWidget      *widget,
 char *
 terminal_screen_get_current_dir (TerminalScreen *screen)
 {
+  TerminalScreenPrivate *priv = screen->priv;
   const char *uri;
 
   uri = vte_terminal_get_current_directory_uri (VTE_TERMINAL (screen));
   if (uri != nullptr)
     return g_filename_from_uri (uri, nullptr, nullptr);
+
+  if (priv->child_pid > 0) {
+    char *cwd = cwd_of_pid (priv->child_pid);
+    if (cwd != NULL) {
+      g_debug ("terminal_screen_get_current_dir: VTE current dir n/a, reading from /proc: %s", cwd);
+      return cwd;
+    }
+  }
 
   ExecData *data = screen->priv->exec_data;
   if (data && data->cwd)
@@ -1920,8 +2175,8 @@ terminal_screen_drag_data_received (GtkWidget        *widget,
       {
         GdkAtom atom = GDK_POINTER_TO_ATOM (tmp->data);
 
-        g_print ("Target: %s\n", gdk_atom_name (atom));        
-        
+        g_print ("Target: %s\n", gdk_atom_name (atom));
+
         tmp = tmp->next;
       }
 
@@ -1984,7 +2239,7 @@ terminal_screen_drag_data_received (GtkWidget        *widget,
         char *utf8_data, *text;
         char *uris[2];
         gsize len;
-        
+
         /* MOZ_URL is in UCS-2 but in format 8. BROKEN!
          *
          * The data contains the URL, a \n, then the
@@ -2020,7 +2275,7 @@ terminal_screen_drag_data_received (GtkWidget        *widget,
         char *utf8_data, *newline, *text;
         char *uris[2];
         gsize len;
-        
+
         /* The data contains the URL, a \n, then the
          * title of the web page.
          */
@@ -2200,7 +2455,7 @@ terminal_screen_check_extra (TerminalScreen *screen,
  *
  * Checks whether there's a foreground process running in
  * this terminal.
- * 
+ *
  * Returns: %TRUE iff there's a foreground process running in @screen
  */
 gboolean
