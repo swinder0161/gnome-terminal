@@ -78,10 +78,16 @@ G_BEGIN_DECLS
 #define TERMINAL_PROFILE_VISIBLE_NAME_KEY               "visible-name"
 #define TERMINAL_PROFILE_WORD_CHAR_EXCEPTIONS_KEY       "word-char-exceptions"
 
+#define TERMINAL_PROFILE_USE_TRANSPARENT_BACKGROUND      "use-transparent-background"
+#define TERMINAL_PROFILE_USE_THEME_TRANSPARENCY          "use-theme-transparency"
+#define TERMINAL_PROFILE_BACKGROUND_TRANSPARENCY_PERCENT "background-transparency-percent"
+
 #define TERMINAL_SETTING_CONFIRM_CLOSE_KEY              "confirm-close"
 #define TERMINAL_SETTING_CONTEXT_INFO_KEY               "context-info"
 #define TERMINAL_SETTING_DEFAULT_SHOW_MENUBAR_KEY       "default-show-menubar"
 #define TERMINAL_SETTING_ENABLE_MENU_BAR_ACCEL_KEY      "menu-accelerator-enabled"
+#define TERMINAL_SETTING_ENABLE_COPY_ON_SELECT_KEY      "copy-on-select-enabled"
+#define TERMINAL_SETTING_ENABLE_PASTE_ON_SEC_CLICK_KEY  "paste-on-secondary-click-enabled"
 #define TERMINAL_SETTING_ENABLE_MNEMONICS_KEY           "mnemonics-enabled"
 #define TERMINAL_SETTING_ENABLE_SHORTCUTS_KEY           "shortcuts-enabled"
 #define TERMINAL_SETTING_HEADERBAR_KEY                  "headerbar"
